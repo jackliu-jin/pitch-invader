@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>[DEBUG] Pitch Invader</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* 调试面板样式（仅 debug 版使用，不污染正式版 style.css） */
+  #dbgPanel{position:fixed;top:0;left:0;z-index:1000;background:rgba(10,12,16,.86);color:#e0e0e0;
+    font:12px/1.4 Consolas,monospace;padding:8px;max-width:260px;border-bottom-right-radius:10px;
+    border:1px solid #2a3a4a;pointer-events:auto;}
+  #dbgPanel h3{margin:0 0 6px;color:#ffd700;font-size:13px;display:flex;justify-content:space-between;align-items:center;}
+  #dbgState{white-space:pre-wrap;background:#000;padding:5px;border-radius:5px;color:#6cf;margin-bottom:6px;font-size:11px;}
+  #dbgBtns{display:flex;flex-wrap:wrap;gap:4px;}
+  #dbgBtns button{flex:1 1 auto;min-width:62px;background:#1b3a2a;color:#fff;border:1px solid #3a6a4a;
+    border-radius:5px;padding:5px 4px;font-size:11px;cursor:pointer;}
+  #dbgBtns button:hover{background:#2e5a3a;}
+  #dbgBtns button.on{background:#b8860b;border-color:#ffd700;color:#000;font-weight:bold;}
+  #dbgBtns button.warn{background:#5a1b1b;border-color:#a33;}
+  #dbgCollapse{background:#333;border:1px solid #555;color:#fff;border-radius:4px;cursor:pointer;font-size:11px;padding:0 6px;}
+  #dbgPanel.collapsed #dbgState, #dbgPanel.collapsed #dbgBtns{display:none;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="rotatePrompt"><div class="icon">📱</div>请横屏旋转手机以获得最佳体验</div>
+<div id="ui">
+  <div id="hud">
+    <div class="score" id="scoreDisplay">0</div>
+    <div class="time" id="timeDisplay">00:00</div>
+  </div>
+  <div id="stamWrap"><div id="stamBar"></div></div>
+  <div id="riotWrap"><div id="riotBar"></div></div>
+  <div id="progressWrap"><div id="progressBar"></div></div>
+  <div id="commentary"></div>
+  <div id="upgradeHUD">体力 Lv0　移速 Lv0<br>翻滚 Lv0　视野 Lv0</div>
+  <div id="flash"></div>
+  <div id="goldFlash"></div>
+  <div id="dangerVignette"></div>
+
+  <div id="joystick"><div id="joystickKnob"></div></div>
+  <div id="btnSprint">冲刺</div>
+  <div id="btnRoll">翻滚</div>
+
+  <div id="upgradePanel">
+    <h2>升级时刻！</h2>
+    <div id="upgradeOpts"></div>
+  </div>
+
+  <div id="endPanel">
+    <h1 id="endTitle">游戏结束</h1>
+    <div id="endStats"></div>
+    <button id="restartBtn">再次冲场</button>
+  </div>
+
+  <div id="startPanel">
+    <h1>[DEBUG] Pitch Invader</h1>
+    <p>这是调试版本，与正式版共用同一份 game.js（测试的就是真实游戏逻辑）。<br>
+    左上角调试面板可开启无敌、慢动作、生成保安/球星、秒拍、强制升级、显示判定圈等。</p>
+    <button id="startBtn">开始冲场</button>
+  </div>
+</div>
+
+<!-- 调试面板 -->
+<div id="dbgPanel">
+  <h3><span>🛠 DEBUG</span><button id="dbgCollapse">折叠</button></h3>
+  <div id="dbgState">loading...</div>
+  <div id="dbgBtns">
+    <button data-act="start">开始/重开</button>
+    <button data-act="god" id="btnGod">无敌</button>
+    <button data-act="slow">慢动作×0.3</button>
+    <button data-act="normal">正常速度</button>
+    <button data-act="fast">快进×2</button>
+    <button data-act="score">+1000分</button>
+    <button data-act="upgrade">强制升级</button>
+    <button data-act="sec3">+3保安</button>
+    <button data-act="elite">+精英保安</button>
+    <button data-act="clearsec" class="warn">清空保安</button>
+    <button data-act="star">+球星</button>
+    <button data-act="snap">秒拍最近</button>
+    <button data-act="riot">触发暴动</button>
+    <button data-act="hitbox" id="btnHitbox">判定圈</button>
+    <button data-act="zoomout">缩小视野</button>
+    <button data-act="zoomin">放大视野</button>
+  </div>
+</div>
+
+<script src="game.js"></script>
+<script>
+(function(){
+  const D = window.GAME_DEBUG;
+  const stateEl = document.getElementById('dbgState');
+  const btnGod = document.getElementById('btnGod');
+  const btnHitbox = document.getElementById('btnHitbox');
+
+  // FPS 计数
+  let frames=0, lastFps=performance.now(), fps=0;
+  function tickFps(){ frames++; const t=performance.now(); if(t-lastFps>=500){ fps=Math.round(frames*1000/(t-lastFps)); frames=0; lastFps=t; } requestAnimationFrame(tickFps); }
+  requestAnimationFrame(tickFps);
+
+  function refresh(){
+    const s = D.state();
+    stateEl.textContent =
+      `FPS:${fps}  分数:${s.score}\n`+
+      `合影:${s.photographed}  狂热:${s.riot}\n`+
+      `保安:${s.security}  球员:${s.players}\n`+
+      `下次升级@:${s.nextUpgradeAt}\n`+
+      `无敌:${s.godMode?'ON':'off'}  时速:${s.timeScale}\n`+
+      `缩放:${s.zoom}  ${s.gameOver?'[已结束]':s.paused?'[暂停]':'[运行]'}`;
+  }
+  setInterval(refresh, 200);
+
+  const acts = {
+    start: ()=> D.start(),
+    god: ()=>{ const on=D.toggleGod(); btnGod.classList.toggle('on', on); },
+    slow: ()=> D.setTimeScale(0.3),
+    normal: ()=> D.setTimeScale(1),
+    fast: ()=> D.setTimeScale(2),
+    score: ()=> D.addScore(1000),
+    upgrade: ()=> D.forceUpgrade(),
+    sec3: ()=> D.spawnSecurity(3, false),
+    elite: ()=> D.spawnSecurity(1, true),
+    clearsec: ()=> D.clearSecurity(),
+    star: ()=> D.spawnStar(),
+    snap: ()=> D.photographNearest(),
+    riot: ()=> D.triggerRiot(),
+    hitbox: ()=>{ const on=D.toggleHitboxes(); btnHitbox.classList.toggle('on', on); },
+    zoomout: ()=> D.setZoom(D.state().zoom - 0.1),
+    zoomin: ()=> D.setZoom(D.state().zoom + 0.1)
+  };
+  document.getElementById('dbgBtns').addEventListener('click', e=>{
+    const act = e.target.getAttribute('data-act');
+    if(act && acts[act]) acts[act]();
+  });
+  document.getElementById('dbgCollapse').addEventListener('click', e=>{
+    const p = document.getElementById('dbgPanel');
+    p.classList.toggle('collapsed');
+    e.target.textContent = p.classList.contains('collapsed') ? '展开' : '折叠';
+  });
+})();
+</script>
+</body>
+</html>
