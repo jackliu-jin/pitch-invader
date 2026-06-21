@@ -76,26 +76,52 @@ const SPRITES = {
   guardElite:buildCharacterSprites({h:'#1a0033', k:'#caa07a', '1':'#4a148c', '2':'#7b1fa2', b:'#000'}),
   riot:      buildCharacterSprites({h:'#333333', k:'#ffccaa', '1':'#69f0ae', '2':'#2e7d32', b:'#111'})
 };
-function drawSprite(sprite, sp, w, h, flip){
+function drawSprite(sprite, sp, w, h, flip, bob){
   w *= ZOOM; h *= ZOOM;
   ctx.save();
-  ctx.translate(sp.x, sp.y);
+  ctx.translate(sp.x, sp.y + (bob||0));
   if(flip) ctx.scale(-1,1);
   ctx.drawImage(sprite, -w/2, -h*0.62, w, h);
   ctx.restore();
 }
-const ANIM_STRIDE = 14;
+const ANIM_STRIDE = 8; // 更短的步频 = 跑动更轻快
 function stepWalkAnim(entity, speed, dt){
   if(speed < 0.15){ entity.animFrame = 'stand'; return; }
   entity.animPhase = (entity.animPhase||0) + speed*dt;
   entity.animFrame = Math.floor(entity.animPhase/ANIM_STRIDE)%2===0 ? 'a' : 'b';
 }
+// 跑动时的轻快上下弹跳偏移（屏幕像素，负=向上）
+function hopOffset(entity){
+  if(!entity || entity.animFrame==='stand') return 0;
+  return -Math.abs(Math.sin((entity.animPhase||0)*0.35))*3.2*ZOOM;
+}
 
 // ---------- World ----------
+// WORLD = 可走动范围（球场 + 外圈缓冲跑道）；FIELD = 画白线的标准球场，在 WORLD 内缩进 FIELD_MARGIN
 const WORLD_W = 2200, WORLD_H = 1400;
+const FIELD_MARGIN = 110; // 球场白线到硬边界之间的缓冲跑道宽度（消除“空气墙”观感）
+const FIELD_X0 = FIELD_MARGIN, FIELD_Y0 = FIELD_MARGIN;
+const FIELD_X1 = WORLD_W - FIELD_MARGIN, FIELD_Y1 = WORLD_H - FIELD_MARGIN;
+const FIELD_W = FIELD_X1 - FIELD_X0, FIELD_H = FIELD_Y1 - FIELD_Y0;
 let ZOOM = 0.72; // <1 = 镜头拉远，画面可视范围更大，人物相对场地比例更小
 let camera = new Vec2(0,0);
 const STAND_DEPTH = 260;
+
+// ---------- 可调参数（debug 面板实时调节，正常游戏用默认值）----------
+const TUNE = {
+  playerAccel: 0.22,        // 主角转向/加速惯性（越大越灵敏）
+  securityAccel: 0.045,     // 普通保安惯性（越小越笨重，越容易被假动作骗）
+  securityAccelElite: 0.075,// 精英保安惯性
+  fbAccel: 0.10,            // 球员（梅西/C罗等）惯性
+  playerBaseSpeed: 2.6,
+  sprintMult: 1.8,
+  secRatio: 0.62,           // 普通保安速度 = 主角速度 × 此比例
+  secRatioElite: 0.85,
+  starSpeed: 2.5,           // 球星逃跑基准速度
+  commonSpeed: 1.9,         // 普通球员逃跑基准速度
+  starStamina: 170,         // 球星体力（大，难抓）
+  commonStamina: 55         // 普通球员体力（小，容易追到累垮）
+};
 
 // crowd pixel dots for stadium stands
 let crowdDots = [];
@@ -243,8 +269,8 @@ setInterval(()=>{
 }, 350);
 
 // ---------- Player ----------
-const PLAYER_ACCEL = 0.25; // 移动惯性：数值越大转向越快（惯性越小）
-function getSpawnPos(){ return new Vec2(WORLD_W/2, WORLD_H - 26); } // 从边线翻入场内，写实出生点
+// 主角惯性见 TUNE.playerAccel
+function getSpawnPos(){ return new Vec2(WORLD_W/2, FIELD_Y1 - 6); } // 从底部边线翻入场内，写实出生点
 const player = {
   pos: getSpawnPos(),
   vel: new Vec2(0,0),
@@ -287,6 +313,14 @@ function randomEdgePos(){
   if(edge===2) return new Vec2(m, m+Math.random()*(WORLD_H-2*m));
   return new Vec2(WORLD_W-m, m+Math.random()*(WORLD_H-2*m));
 }
+// 球员从球场边线跑入（停留在球场白线内）
+function randomFieldEdgePos(){
+  const edge = Math.floor(Math.random()*4), m=20;
+  if(edge===0) return new Vec2(FIELD_X0+m+Math.random()*(FIELD_W-2*m), FIELD_Y0+m);
+  if(edge===1) return new Vec2(FIELD_X0+m+Math.random()*(FIELD_W-2*m), FIELD_Y1-m);
+  if(edge===2) return new Vec2(FIELD_X0+m, FIELD_Y0+m+Math.random()*(FIELD_H-2*m));
+  return new Vec2(FIELD_X1-m, FIELD_Y0+m+Math.random()*(FIELD_H-2*m));
+}
 function nearestEdgeDir(p){
   const dl=p.x, dr=WORLD_W-p.x, du=p.y, db=WORLD_H-p.y;
   const m=Math.min(dl,dr,du,db);
@@ -299,8 +333,9 @@ function makeFootballPlayer(opts){
   opts = opts || {};
   const team = TEAM_DEFS[Math.floor(Math.random()*TEAM_DEFS.length)];
   const isStar = !!opts.isStar;
-  const pos = opts.atEdge ? randomEdgePos()
-            : new Vec2(200+Math.random()*(WORLD_W-400), 200+Math.random()*(WORLD_H-400));
+  const pos = opts.atEdge ? randomFieldEdgePos()
+            : new Vec2(FIELD_X0+60+Math.random()*(FIELD_W-120), FIELD_Y0+60+Math.random()*(FIELD_H-120));
+  const staminaMax = isStar ? TUNE.starStamina : TUNE.commonStamina;
   return {
     id: playerIdCounter++,
     team: team.name, color: team.color, accent: team.accent,
@@ -312,7 +347,8 @@ function makeFootballPlayer(opts){
     photographed:false, leaving:false,
     fleeing:false, progress:0, beingPhotographed:false,
     chasedRecently:false, chaseTimer:0,
-    speed: isStar ? 2.4 : 1.2,
+    fleeRadius: isStar ? 175 : 100,    // 普通球员也会躲避，但触发距离更近
+    stamina: staminaMax, fbExhausted:false, fbExhaustTimer:0,
     animFrame:'stand', animPhase:0
   };
 }
@@ -336,9 +372,7 @@ spawnFootballPlayers();
 let security = [];
 let securitySpawnTimer = 0;
 let baseSecurityCount = 2;
-// 安保惯性（转向加速度）远小于主角，方便玩家用变向假动作骗过追兵
-const SECURITY_ACCEL = 0.045;
-const SECURITY_ACCEL_ELITE = 0.075;
+// 安保惯性参数见 TUNE.securityAccel / securityAccelElite
 const LUNGE_RANGE = 70;
 const LUNGE_CHARGE_DURATION = 28; // 飞扑前的蓄力时间
 const LUNGE_DURATION = 16;
@@ -355,7 +389,7 @@ function spawnSecurity(elite=false){
   else pos = new Vec2(WORLD_W, Math.random()*WORLD_H);
   security.push({
     pos, vel:new Vec2(0,0),
-    speedRatio: elite ? 0.85 : 0.62, // 始终慢于主角当前移速的比例
+    speedRatio: elite ? TUNE.secRatioElite : TUNE.secRatio, // 每帧会按 TUNE 重算
     elite,
     distracted:false,
     distractTarget:null,
@@ -424,10 +458,14 @@ function triggerRiot(){
   }
 }
 
-// ---------- Helper: clamp to world ----------
+// ---------- Helper: clamp ----------
 function clampToWorld(pos, r){
   pos.x = Math.max(r, Math.min(WORLD_W-r, pos.x));
   pos.y = Math.max(r, Math.min(WORLD_H-r, pos.y));
+}
+function clampToField(pos, r){
+  pos.x = Math.max(FIELD_X0+r, Math.min(FIELD_X1-r, pos.x));
+  pos.y = Math.max(FIELD_Y0+r, Math.min(FIELD_Y1-r, pos.y));
 }
 
 // ---------- Update ----------
@@ -465,13 +503,13 @@ function updatePlayer(dt){
     player.rollDir = move.len()>0? move : player.facing;
     player.stamina -= upgrades.rollCost;
   } else {
-    let speed = player.baseSpeed * upgrades.speedMult;
+    let speed = TUNE.playerBaseSpeed * upgrades.speedMult;
     if(player.exhausted) speed *= 0.4;
-    else if(wantSprint){ speed *= player.sprintMult; player.stamina -= 0.4; }
+    else if(wantSprint){ speed *= TUNE.sprintMult; player.stamina -= 0.4; }
 
     // 移动带惯性：速度向目标速度平滑过渡，松手或变向时会有滑行感
     const targetVel = move.scale(speed);
-    player.vel = player.vel.add(targetVel.sub(player.vel).scale(PLAYER_ACCEL*dt));
+    player.vel = player.vel.add(targetVel.sub(player.vel).scale(TUNE.playerAccel*dt));
 
     let np = player.pos.add(player.vel.scale(dt));
     clampToWorld(np, player.radius);
@@ -506,37 +544,33 @@ function updateFootballPlayers(dt){
 
     // 合影完成后跑下场，跑出边界就移除（由 refillPlayers 补充新球员）
     if(fp.leaving){
-      let np = fp.pos.add(fp.dir.scale(3.4));
-      fp.pos = np;
-      stepWalkAnim(fp, 3.4, dt);
+      fp.vel = fp.vel.add(fp.dir.scale(3.6).sub(fp.vel).scale(0.2*dt));
+      fp.pos = fp.pos.add(fp.vel.scale(dt));
+      stepWalkAnim(fp, fp.vel.len(), dt);
       if(fp.pos.x<-40||fp.pos.x>WORLD_W+40||fp.pos.y<-40||fp.pos.y>WORLD_H+40) players.splice(i,1);
       continue;
     }
 
+    const staminaMax = fp.isStar ? TUNE.starStamina : TUNE.commonStamina;
+    if(fp.stamina > staminaMax) fp.stamina = staminaMax;
+    const baseSpeed = fp.isStar ? TUNE.starSpeed : TUNE.commonSpeed;
     const distToPlayer = Vec2.dist(fp.pos, player.pos);
-    const danger = distToPlayer < 140;
-    // 球星抓捕半径：贴得够近就算“抓住”，强制合影（即使他正在逃跑）
-    const grabbed = fp.isStar && distToPlayer < photoRange*0.8 && !player.rolling;
+    // 贴脸抓住：任何球员被逼到极近都会被强制定身合影
+    const grabbed = distToPlayer < photoRange*0.8 && !player.rolling;
+    // 想逃：进入躲避半径、有体力、未累垮、玩家不在翻滚无敌中
+    const wantFlee = !grabbed && !player.rolling && distToPlayer < fp.fleeRadius && fp.stamina>0 && !fp.fbExhausted;
 
-    if(fp.isStar && danger && !player.rolling && !grabbed){
-      fp.fleeing = true;
-      fp.chasedRecently = true;
-      fp.chaseTimer = 90;
-    }
-    if(fp.chaseTimer>0){ fp.chaseTimer -= dt; } else { fp.chasedRecently = false; }
-
+    let desiredDir, desiredSpeed;
     if(grabbed){
-      // 被逼到极近距离：停下来被迫配合合影
       fp.fleeing = false;
-      stepWalkAnim(fp, 0, dt);
-    } else if(fp.fleeing && danger){
-      const away = fp.pos.sub(player.pos).norm();
-      fp.dir = away;
-      const moveSpeed = fp.speed*1.6;
-      let np = fp.pos.add(fp.dir.scale(moveSpeed));
-      clampToWorld(np, 12);
-      fp.pos = np;
-      stepWalkAnim(fp, moveSpeed, dt);
+      desiredDir = new Vec2(0,0); desiredSpeed = 0; // 定身
+    } else if(wantFlee){
+      fp.fleeing = true;
+      fp.chasedRecently = true; fp.chaseTimer = 90;
+      desiredDir = fp.pos.sub(player.pos).norm();
+      desiredSpeed = baseSpeed * 1.5;
+      fp.stamina -= (fp.isStar ? 0.8 : 1.1) * dt; // 逃跑消耗体力，普通球员掉得更快
+      if(fp.stamina <= 0){ fp.stamina = 0; fp.fbExhausted = true; fp.fbExhaustTimer = 70; }
     } else {
       fp.fleeing = false;
       fp.wanderTimer -= dt;
@@ -544,18 +578,34 @@ function updateFootballPlayers(dt){
         fp.dir = new Vec2(Math.random()-0.5, Math.random()-0.5).norm();
         fp.wanderTimer = 60+Math.random()*90;
       }
-      const moveSpeed = fp.speed*0.5;
-      let np = fp.pos.add(fp.dir.scale(moveSpeed));
-      clampToWorld(np, 12);
-      fp.pos = np;
-      stepWalkAnim(fp, moveSpeed, dt);
+      desiredDir = fp.dir;
+      desiredSpeed = fp.fbExhausted ? baseSpeed*0.18 : baseSpeed*0.45; // 累垮后气喘吁吁地慢走
+    }
+    if(desiredDir.len()>0) fp.dir = desiredDir;
+
+    // 体力恢复 / 气喘惩罚计时
+    if(fp.fbExhausted){
+      fp.fbExhaustTimer -= dt;
+      if(fp.fbExhaustTimer<=0){ fp.fbExhausted=false; fp.stamina = staminaMax*0.4; }
+    } else if(!wantFlee){
+      fp.stamina = Math.min(staminaMax, fp.stamina + 0.5*dt);
     }
 
-    // 合影判定：球星必须被抓住（贴脸）才能拍；普通球员靠近且未逃跑即可
-    const inRange = fp.isStar ? grabbed : (distToPlayer < photoRange && !fp.fleeing);
+    // 惯性：速度平滑过渡到目标速度（增加真实感与可被假动作甩开的余地）
+    const targetVel = desiredDir.scale(desiredSpeed);
+    fp.vel = fp.vel.add(targetVel.sub(fp.vel).scale(TUNE.fbAccel*dt));
+    let np = fp.pos.add(fp.vel.scale(dt));
+    clampToField(np, 12);
+    fp.pos = np;
+    stepWalkAnim(fp, fp.vel.len(), dt);
+
+    if(fp.chaseTimer>0){ fp.chaseTimer -= dt; } else { fp.chasedRecently = false; }
+
+    // 合影判定：贴脸抓住，或对方已停下/累垮且在合影半径内
+    const inRange = grabbed || (distToPlayer < photoRange && !fp.fleeing);
     if(inRange){
       fp.beingPhotographed = true;
-      fp.progress += fp.isStar ? dt*1.4 : dt; // 抓住球星后强制合影，进度更快
+      fp.progress += (grabbed ? 1.3 : 1.0) * dt;
       if(fp.progress >= 60) completePhoto(fp);
     } else {
       fp.beingPhotographed = false;
@@ -615,8 +665,10 @@ function updateSecurity(dt){
     securitySpawnTimer = Math.max(30, 90 - Math.floor(elapsed/10) - Math.floor(photographed/4));
   }
 
-  const playerCurrentSpeed = player.baseSpeed * upgrades.speedMult;
+  const playerCurrentSpeed = TUNE.playerBaseSpeed * upgrades.speedMult;
   for(const s of security){
+    // 用 TUNE 实时计算速度比例与惯性，使 debug 调节即时生效
+    s.speedRatio = s.elite ? TUNE.secRatioElite : TUNE.secRatio;
     if(s.lungeCooldown>0) s.lungeCooldown -= dt;
     let chasingDecoy = false;
 
@@ -668,7 +720,7 @@ function updateSecurity(dt){
       const targetSpeed = playerCurrentSpeed * s.speedRatio;
       const targetVel = dir.scale(targetSpeed);
       // 安保惯性更大：转向比主角慢得多，玩家可以靠急停变向把他们骗过去
-      const accel = s.elite ? SECURITY_ACCEL_ELITE : SECURITY_ACCEL;
+      const accel = s.elite ? TUNE.securityAccelElite : TUNE.securityAccel;
       s.vel = s.vel.add(targetVel.sub(s.vel).scale(accel*dt));
 
       const distToPlayer = Vec2.dist(s.pos, player.pos);
@@ -833,30 +885,74 @@ function drawStands(now){
   }
 }
 
+function wpt(x,y){ return worldToScreen(new Vec2(x,y)); }
+function wRect(x,y,w,h){ const p=wpt(x,y); ctx.strokeRect(p.x,p.y,w*ZOOM,h*ZOOM); }
+
+function drawFieldLines(){
+  const lw = Math.max(1.5, 3*ZOOM);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = lw;
+  const cx = WORLD_W/2, cy = WORLD_H/2;
+  // 外边界
+  wRect(FIELD_X0, FIELD_Y0, FIELD_W, FIELD_H);
+  // 中线
+  let a=wpt(cx,FIELD_Y0), b=wpt(cx,FIELD_Y1);
+  ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+  // 中圈 + 中点
+  const center = wpt(cx,cy), centerR = Math.min(FIELD_W,FIELD_H)*0.12;
+  ctx.beginPath(); ctx.arc(center.x,center.y,centerR*ZOOM,0,Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(center.x,center.y,3*ZOOM,0,Math.PI*2); ctx.fill();
+  // 禁区/小禁区/点球点/弧线（左右两侧）
+  const pD=FIELD_W*0.13, pH=FIELD_H*0.55;     // 大禁区
+  const gD=FIELD_W*0.045, gH=FIELD_H*0.28;    // 小禁区
+  const spotDist=FIELD_W*0.085;               // 点球点距门线
+  const arcR=FIELD_H*0.10;
+  [{gx:FIELD_X0, s:1},{gx:FIELD_X1, s:-1}].forEach(side=>{
+    const {gx,s}=side;
+    wRect(s>0?gx:gx-pD, cy-pH/2, pD, pH);     // 大禁区
+    wRect(s>0?gx:gx-gD, cy-gH/2, gD, gH);     // 小禁区
+    const spot = wpt(gx + s*spotDist, cy);
+    ctx.beginPath(); ctx.arc(spot.x,spot.y,3*ZOOM,0,Math.PI*2); ctx.fill();  // 点球点
+    // 罚球弧（只画禁区外那段）
+    ctx.beginPath();
+    const a0 = s>0 ? -Math.PI/2.6 : Math.PI - Math.PI/2.6;
+    const a1 = s>0 ?  Math.PI/2.6 : Math.PI + Math.PI/2.6;
+    ctx.arc(spot.x, spot.y, arcR*ZOOM, a0, a1, s<0);
+    ctx.stroke();
+    // 球门（门线外的小框）
+    const goalD=24, goalH=FIELD_H*0.13;
+    ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.95)';
+    wRect(s>0?gx-goalD:gx, cy-goalH/2, goalD, goalH);
+    ctx.restore();
+  });
+  // 角球弧
+  const cR=24;
+  [[FIELD_X0,FIELD_Y0,0,Math.PI/2],[FIELD_X1,FIELD_Y0,Math.PI/2,Math.PI],
+   [FIELD_X1,FIELD_Y1,Math.PI,Math.PI*1.5],[FIELD_X0,FIELD_Y1,Math.PI*1.5,Math.PI*2]].forEach(c=>{
+    const p=wpt(c[0],c[1]); ctx.beginPath(); ctx.arc(p.x,p.y,cR*ZOOM,c[2],c[3]); ctx.stroke();
+  });
+}
+
 function drawPitch(now){
   drawStands(now);
+  // 缓冲跑道（球场外圈，可走动）——较深的草色
+  const wtl = wpt(0,0);
+  ctx.fillStyle = '#246627';
+  ctx.fillRect(wtl.x, wtl.y, WORLD_W*ZOOM, WORLD_H*ZOOM);
+  // 球场草坪 + 条纹（裁剪在球场范围内）
+  const ftl = wpt(FIELD_X0, FIELD_Y0);
   ctx.fillStyle = '#2e7d32';
-  const tl0 = worldToScreen(new Vec2(0,0));
-  ctx.fillRect(tl0.x, tl0.y, WORLD_W, WORLD_H);
-  // 像素草坪纹理：粗条纹 + 颗粒噪点
-  const stripeW = 100;
+  ctx.fillRect(ftl.x, ftl.y, FIELD_W*ZOOM, FIELD_H*ZOOM);
+  const stripeW = 100*ZOOM;
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(tl0.x, tl0.y, WORLD_W, WORLD_H);
-  ctx.clip();
-  for(let x = -camera.x % stripeW - stripeW; x < canvas.width+stripeW; x+=stripeW*2){
-    ctx.fillStyle = 'rgba(255,255,255,0.04)';
-    ctx.fillRect(x,0,stripeW,canvas.height);
+  ctx.beginPath(); ctx.rect(ftl.x, ftl.y, FIELD_W*ZOOM, FIELD_H*ZOOM); ctx.clip();
+  for(let x = ftl.x; x < ftl.x + FIELD_W*ZOOM; x += stripeW*2){
+    ctx.fillStyle = 'rgba(255,255,255,0.045)';
+    ctx.fillRect(x, ftl.y, stripeW, FIELD_H*ZOOM);
   }
   ctx.restore();
-  // boundary lines
-  const tl = worldToScreen(new Vec2(0,0));
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(tl.x, tl.y, WORLD_W, WORLD_H);
-  // center circle
-  const center = worldToScreen(new Vec2(WORLD_W/2, WORLD_H/2));
-  ctx.beginPath(); ctx.arc(center.x, center.y, 100, 0, Math.PI*2); ctx.stroke();
+  drawFieldLines();
 
   // crowd flash particles (camera flashes from the stands)
   for(const f of flashes){
@@ -898,26 +994,41 @@ function drawPlayer(now){
   const sp = worldToScreen(player.pos);
   ctx.save();
   if(player.rolling) ctx.globalAlpha = 0.55;
-  drawSprite(SPRITES.fan[player.animFrame||'stand'], sp, 30, 44, player.facing.x<-0.1);
+  drawSprite(SPRITES.fan[player.animFrame||'stand'], sp, 28, 42, player.facing.x<-0.1, player.rolling?0:hopOffset(player));
   ctx.restore();
   drawStaminaBar();
 }
 
+function drawMiniStaminaBar(sp, frac, w, exhausted, topY){
+  const h=4*ZOOM; w*=ZOOM;
+  const x=sp.x-w/2, y=topY;
+  ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(x,y,w,h);
+  ctx.fillStyle = exhausted? '#888' : (frac<0.3? '#ff5252' : (frac<0.6? '#ffc107' : '#4caf50'));
+  ctx.fillRect(x,y,w*Math.max(0,frac),h);
+}
 function drawFootballPlayers(){
   for(const fp of players){
     const sp = worldToScreen(fp.pos);
     if(sp.x<-30||sp.x>canvas.width+30||sp.y<-30||sp.y>canvas.height+30) continue;
     if(fp.leaving) ctx.globalAlpha = 0.7;
     const spriteSet = fp.team==='ARG' ? (fp.isStar?SPRITES.argStar:SPRITES.argCommon) : (fp.isStar?SPRITES.porStar:SPRITES.porCommon);
-    const w = fp.isStar?32:26, h = fp.isStar?46:38;
-    drawSprite(spriteSet[fp.animFrame||'stand'], sp, w, h, fp.dir && fp.dir.x<-0.1);
+    const w = fp.isStar?30:24, h = fp.isStar?44:36;
+    const bob = hopOffset(fp);
+    drawSprite(spriteSet[fp.animFrame||'stand'], sp, w, h, fp.dir && fp.dir.x<-0.1, bob);
     ctx.fillStyle='#fff'; ctx.font='bold 10px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.strokeStyle='#000'; ctx.lineWidth=2;
-    ctx.strokeText(fp.number, sp.x, sp.y-2);
-    ctx.fillText(fp.number, sp.x, sp.y-2);
+    ctx.strokeText(fp.number, sp.x, sp.y-2+bob);
+    ctx.fillText(fp.number, sp.x, sp.y-2+bob);
     if(fp.isStar){
       ctx.strokeStyle='#ffd700'; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(sp.x, sp.y-4*ZOOM, 22*ZOOM, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sp.x, sp.y-4*ZOOM+bob, 20*ZOOM, 0, Math.PI*2); ctx.stroke();
+    }
+    // 体力槽：球星更宽更显眼，普通球员窄；只在被惊动（逃过/未满/累垮）时显示
+    if(!fp.leaving){
+      const staminaMax = fp.isStar ? TUNE.starStamina : TUNE.commonStamina;
+      if(fp.fleeing || fp.fbExhausted || fp.stamina < staminaMax-0.5){
+        drawMiniStaminaBar(sp, fp.stamina/staminaMax, fp.isStar?34:20, fp.fbExhausted, sp.y-(fp.isStar?30:24)*ZOOM);
+      }
     }
     if(fp.beingPhotographed){
       ctx.strokeStyle='#00e5ff'; ctx.lineWidth=3;
@@ -951,7 +1062,7 @@ function drawSecurity(now){
     }
     ctx.save();
     ctx.globalAlpha = alpha;
-    drawSprite(spriteSet[s.animFrame||'stand'], sp, 28*scale, 40*scale, s.vel.x<-0.1);
+    drawSprite(spriteSet[s.animFrame||'stand'], sp, 26*scale, 38*scale, s.vel.x<-0.1, s.state==='chase'?hopOffset(s):0);
     ctx.restore();
     if(s.elite){
       ctx.fillStyle='#ffd700'; ctx.font='bold 12px Arial'; ctx.textAlign='center';
@@ -963,7 +1074,7 @@ function drawSecurity(now){
 function drawRiotNPCs(){
   for(const r of riotNPCs){
     const sp = worldToScreen(r.pos);
-    drawSprite(SPRITES.riot[r.animFrame||'stand'], sp, 24, 36, r.dir && r.dir.x<-0.1);
+    drawSprite(SPRITES.riot[r.animFrame||'stand'], sp, 22, 34, r.dir && r.dir.x<-0.1, hopOffset(r));
   }
 }
 
@@ -1004,10 +1115,13 @@ function render(now){
 function drawHitboxes(){
   // 调试：绘制各实体碰撞圈与判定半径
   const ph = (p,r,color)=>{ const sp=worldToScreen(p); ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(sp.x,sp.y,r*ZOOM,0,Math.PI*2); ctx.stroke(); };
+  // 可走动边界（WORLD）与球场范围（FIELD）
+  ctx.strokeStyle='#ff00ff'; ctx.lineWidth=1.5; let p0=wpt(0,0); ctx.strokeRect(p0.x,p0.y,WORLD_W*ZOOM,WORLD_H*ZOOM);
+  ctx.strokeStyle='rgba(0,255,255,0.5)'; let f0=wpt(FIELD_X0,FIELD_Y0); ctx.strokeRect(f0.x,f0.y,FIELD_W*ZOOM,FIELD_H*ZOOM);
   ph(player.pos, player.radius, '#00ff00');
   ph(player.pos, 50*upgrades.photoRadiusMult, 'rgba(0,229,255,0.7)'); // 合影半径
   for(const s of security){ ph(s.pos, s.radius, '#ff3030'); ph(s.pos, LUNGE_RANGE, 'rgba(255,80,80,0.35)'); }
-  for(const fp of players){ if(fp.leaving) continue; ph(fp.pos, 12, fp.isStar?'#ffd700':'#ffffff'); }
+  for(const fp of players){ if(fp.leaving) continue; ph(fp.pos, 12, fp.isStar?'#ffd700':'#ffffff'); ph(fp.pos, fp.fleeRadius, fp.isStar?'rgba(255,215,0,0.25)':'rgba(255,255,255,0.18)'); }
 }
 
 function updateProgressUI(){
@@ -1123,7 +1237,18 @@ window.GAME_DEBUG = {
   photographNearest(){ let best=null,bd=Infinity; for(const fp of players){ if(fp.leaving) continue; const d=Vec2.dist(fp.pos,player.pos); if(d<bd){bd=d;best=fp;} } if(best){ best.pos = player.pos.add(new Vec2(8,0)); best.chasedRecently=true; completePhoto(best); } },
   forceUpgrade(){ showUpgradePanel(); },
   triggerRiot(){ if(!riotActive) triggerRiot(); },
-  refillNow(){ for(let i=0;i<MAX_PLAYERS;i++) refillPlayers(1); }
+  refillNow(){ for(let i=0;i<MAX_PLAYERS;i++) refillPlayers(1); },
+  // 可调参数读写
+  getTune(){ return Object.assign({}, TUNE); },
+  setTune(k, v){ if(k in TUNE){ TUNE[k] = +v; } return TUNE[k]; },
+  // 手动推进模拟若干帧（用于无 rAF 环境下测试逻辑）
+  step(n){ for(let i=0;i<(n||1);i++){ updatePlayer(1); updateFootballPlayers(1); refillPlayers(1); updateSecurity(1); updateRiot(1); } camera.x=player.pos.x-(canvas.width/ZOOM)/2; camera.y=player.pos.y-(canvas.height/ZOOM)/2; },
+  renderOnce(){ camera.x=player.pos.x-(canvas.width/ZOOM)/2; camera.y=player.pos.y-(canvas.height/ZOOM)/2; render(performance.now()); },
+  // 在主角附近放置一个球员用于测试
+  spawnPlayerNear(dx, dy, isStar){ const fp = makeFootballPlayer({isStar:!!isStar}); fp.pos = player.pos.add(new Vec2(dx||60, dy||0)); players.push(fp); return {id:fp.id, isStar:fp.isStar, stamina:fp.stamina}; },
+  movePlayerTo(x, y){ player.pos = new Vec2(x, y); player.vel = new Vec2(0,0); return {x:player.pos.x, y:player.pos.y}; },
+  chaseNearest(dist){ let best=null,bd=Infinity; for(const fp of players){ if(fp.leaving)continue; const d=Vec2.dist(fp.pos,player.pos); if(d<bd){bd=d;best=fp;} } if(best){ const back=best.vel.len()>0.1?best.vel.norm():new Vec2(1,0); player.pos = best.pos.sub(back.scale(dist||60)); } },
+  inspectNearest(){ let best=null,bd=Infinity; for(const fp of players){ if(fp.leaving)continue; const d=Vec2.dist(fp.pos,player.pos); if(d<bd){bd=d;best=fp;} } if(!best) return null; return {isStar:best.isStar, dist:+bd.toFixed(1), fleeing:best.fleeing, stamina:+best.stamina.toFixed(1), exhausted:best.fbExhausted, vel:+best.vel.len().toFixed(2), beingPhotographed:best.beingPhotographed}; }
 };
 
 })();

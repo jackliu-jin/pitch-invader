@@ -19,7 +19,13 @@
   #dbgBtns button.on{background:#b8860b;border-color:#ffd700;color:#000;font-weight:bold;}
   #dbgBtns button.warn{background:#5a1b1b;border-color:#a33;}
   #dbgCollapse{background:#333;border:1px solid #555;color:#fff;border-radius:4px;cursor:pointer;font-size:11px;padding:0 6px;}
-  #dbgPanel.collapsed #dbgState, #dbgPanel.collapsed #dbgBtns{display:none;}
+  #dbgPanel.collapsed #dbgState, #dbgPanel.collapsed #dbgBtns, #dbgPanel.collapsed #dbgParams{display:none;}
+  #dbgParams{margin-top:6px;border-top:1px solid #2a3a4a;padding-top:6px;max-height:46vh;overflow-y:auto;}
+  #dbgParams .row{display:flex;align-items:center;gap:5px;margin-bottom:3px;}
+  #dbgParams .row label{flex:0 0 96px;font-size:10px;color:#9cf;}
+  #dbgParams .row input[type=range]{flex:1;min-width:60px;}
+  #dbgParams .row .val{flex:0 0 38px;text-align:right;font-size:10px;color:#ffd700;}
+  #dbgParams h4{margin:4px 0;color:#6cf;font-size:11px;}
 </style>
 </head>
 <body>
@@ -84,6 +90,7 @@
     <button data-act="zoomout">缩小视野</button>
     <button data-act="zoomin">放大视野</button>
   </div>
+  <div id="dbgParams"></div>
 </div>
 
 <script src="game.js"></script>
@@ -137,6 +144,44 @@
     const p = document.getElementById('dbgPanel');
     p.classList.toggle('collapsed');
     e.target.textContent = p.classList.contains('collapsed') ? '展开' : '折叠';
+  });
+
+  // ---- 参数滑块（实时调节惯性 / 速度 / 体力 / 缩放）----
+  const PARAM_SPEC = [
+    {h:'惯性 / 手感'},
+    {k:'playerAccel',      label:'主角惯性',   min:0.05, max:0.6,  step:0.01},
+    {k:'fbAccel',          label:'球员惯性',   min:0.02, max:0.4,  step:0.01},
+    {k:'securityAccel',    label:'保安惯性',   min:0.01, max:0.25, step:0.005},
+    {k:'securityAccelElite',label:'精英惯性',  min:0.02, max:0.3,  step:0.005},
+    {h:'速度'},
+    {k:'playerBaseSpeed',  label:'主角速度',   min:1,    max:6,    step:0.1},
+    {k:'sprintMult',       label:'冲刺倍率',   min:1,    max:3,    step:0.05},
+    {k:'secRatio',         label:'保安速度比', min:0.3,  max:1.1,  step:0.02},
+    {k:'secRatioElite',    label:'精英速度比', min:0.4,  max:1.2,  step:0.02},
+    {k:'starSpeed',        label:'球星速度',   min:1,    max:5,    step:0.1},
+    {k:'commonSpeed',      label:'普通球员速度',min:0.5, max:4,    step:0.1},
+    {h:'体力'},
+    {k:'starStamina',      label:'球星体力',   min:40,   max:400,  step:5},
+    {k:'commonStamina',    label:'普通体力',   min:10,   max:200,  step:5},
+    {h:'镜头'},
+    {k:'__zoom',           label:'缩放',       min:0.4,  max:1.3,  step:0.02}
+  ];
+  const paramsEl = document.getElementById('dbgParams');
+  const valEls = {};
+  const tune = D.getTune();
+  PARAM_SPEC.forEach(spec=>{
+    if(spec.h){ const h=document.createElement('h4'); h.textContent=spec.h; paramsEl.appendChild(h); return; }
+    const row=document.createElement('div'); row.className='row';
+    const cur = spec.k==='__zoom' ? D.state().zoom : tune[spec.k];
+    row.innerHTML = `<label>${spec.label}</label><input type="range" min="${spec.min}" max="${spec.max}" step="${spec.step}" value="${cur}"><span class="val">${cur}</span>`;
+    const range=row.querySelector('input'), val=row.querySelector('.val');
+    valEls[spec.k]=val;
+    range.addEventListener('input', ()=>{
+      const v=parseFloat(range.value);
+      val.textContent = v;
+      if(spec.k==='__zoom') D.setZoom(v); else D.setTune(spec.k, v);
+    });
+    paramsEl.appendChild(row);
   });
 })();
 </script>
