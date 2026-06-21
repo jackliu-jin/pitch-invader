@@ -36,10 +36,18 @@
   #startPanel h1{color:#ffd700;font-size:30px;}
   #startPanel p{max-width:600px;font-size:14px;line-height:1.6;opacity:.85;}
   #startBtn{margin-top:16px;padding:14px 36px;font-size:20px;background:#4caf50;border:none;border-radius:8px;color:#fff;cursor:pointer;pointer-events:auto;}
+  #commentary{position:absolute;top:14%;left:50%;width:90%;max-width:560px;transform:translate(-50%,-12px);text-align:center;font-size:20px;font-weight:bold;color:#fff;text-shadow:0 0 6px rgba(0,0,0,.9),0 2px 3px rgba(0,0,0,.9);opacity:0;transition:opacity .35s,transform .35s;pointer-events:none;}
+  #commentary.show{opacity:1;transform:translate(-50%,0);}
+  #upgradeHUD{position:absolute;top:8px;right:10px;background:rgba(0,0,0,.45);border:1px solid rgba(255,215,0,.5);border-radius:8px;padding:6px 10px;color:#ffd700;font-size:11px;line-height:1.5;text-align:right;}
+  #rotatePrompt{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.92);color:#fff;display:none;flex-direction:column;align-items:center;justify-content:center;font-size:22px;text-align:center;z-index:999;pointer-events:none;}
+  #rotatePrompt .icon{font-size:50px;margin-bottom:14px;animation:rotateHint 1.6s ease-in-out infinite;}
+  @keyframes rotateHint{0%,100%{transform:rotate(0deg);}50%{transform:rotate(90deg);}}
+  @media (orientation: portrait){ #rotatePrompt{display:flex;} }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="rotatePrompt"><div class="icon">📱</div>请横屏旋转手机以获得最佳体验</div>
 <div id="ui">
   <div id="hud">
     <div class="score" id="scoreDisplay">0</div>
@@ -48,6 +56,8 @@
   <div id="stamWrap"><div id="stamBar"></div></div>
   <div id="riotWrap"><div id="riotBar"></div></div>
   <div id="progressWrap"><div id="progressBar"></div></div>
+  <div id="commentary"></div>
+  <div id="upgradeHUD">体力 Lv0　移速 Lv0<br>翻滚 Lv0　视野 Lv0</div>
   <div id="flash"></div>
   <div id="goldFlash"></div>
   <div id="dangerVignette"></div>
@@ -156,6 +166,7 @@ const SPRITES = {
   riot:      buildCharacterSprites({h:'#333333', k:'#ffccaa', '1':'#69f0ae', '2':'#2e7d32', b:'#111'})
 };
 function drawSprite(sprite, sp, w, h, flip){
+  w *= ZOOM; h *= ZOOM;
   ctx.save();
   ctx.translate(sp.x, sp.y);
   if(flip) ctx.scale(-1,1);
@@ -171,8 +182,9 @@ function stepWalkAnim(entity, speed, dt){
 
 // ---------- World ----------
 const WORLD_W = 2200, WORLD_H = 1400;
+const ZOOM = 0.72; // <1 = 镜头拉远，画面可视范围更大，人物相对场地比例更小
 let camera = new Vec2(0,0);
-const STAND_DEPTH = 220;
+const STAND_DEPTH = 260;
 
 // crowd pixel dots for stadium stands
 let crowdDots = [];
@@ -255,6 +267,33 @@ let rollPressed = false;
 
 // ---------- Game State ----------
 let upgrades = {staminaMax:100, speedMult:1, rollCost:5, photoRadiusMult:1};
+let upgradeLevels = {staminaMax:0, speedMult:0, rollCost:0, photoRadiusMult:0};
+
+// ---------- 解说旁白 ----------
+const OPENING_LINE = '有球迷冲场了！他tm疯了吗！';
+const PHOTO_LINES = [
+  '观众为你振臂高呼！',
+  '比法国超跑还快！',
+  '观众里最锋利的剑！',
+  '名场面诞生了！！',
+  '这画面要刷屏全网了！',
+  '保安都看呆了！',
+  '今晚的主角是他！',
+  '这速度，国足都得连夜集训！'
+];
+let commentaryHideTimer = null;
+function showCommentary(text, duration, color){
+  const el = document.getElementById('commentary');
+  el.textContent = text;
+  el.style.color = color || '#fff';
+  el.classList.add('show');
+  clearTimeout(commentaryHideTimer);
+  commentaryHideTimer = setTimeout(()=>{ el.classList.remove('show'); }, duration || 2600);
+}
+function updateUpgradeHUD(){
+  document.getElementById('upgradeHUD').innerHTML =
+    `体力 Lv${upgradeLevels.staminaMax}　移速 Lv${upgradeLevels.speedMult}<br>翻滚 Lv${upgradeLevels.rollCost}　视野 Lv${upgradeLevels.photoRadiusMult}`;
+}
 let score = 0;
 let elapsed = 0;
 let gameOver = false;
@@ -489,8 +528,7 @@ function updatePlayer(dt){
   } else {
     let speed = player.baseSpeed * upgrades.speedMult;
     if(player.exhausted) speed *= 0.4;
-    else if(wantSprint){ speed *= player.sprintMult; player.stamina -= 0.9; }
-    else { player.stamina = Math.min(upgrades.staminaMax, player.stamina + 0.4); }
+    else if(wantSprint){ speed *= player.sprintMult; player.stamina -= 0.4; }
 
     // 移动带惯性：速度向目标速度平滑过渡，松手或变向时会有滑行感
     const targetVel = move.scale(speed);
@@ -514,7 +552,7 @@ function updatePlayer(dt){
     if(player.exhaustTimer<=0){ player.exhausted=false; player.stamina = 20; }
   }
   if(!wantSprint && !player.rolling && player.stamina < upgrades.staminaMax && !player.exhausted){
-    player.stamina = Math.min(upgrades.staminaMax, player.stamina + 0.25);
+    player.stamina = Math.min(upgrades.staminaMax, player.stamina + 0.45);
   }
   player.stamina = Math.max(0, Math.min(upgrades.staminaMax, player.stamina));
 
@@ -585,6 +623,7 @@ function completePhoto(fp){
   if(fp.isStar) goldFlashAlpha = 1;
   screenShake = 10;
   crowdRoar(fp.isStar?0.35:0.22, fp.isStar?0.9:0.5);
+  showCommentary(PHOTO_LINES[Math.floor(Math.random()*PHOTO_LINES.length)], 2200, fp.isStar?'#ffd700':'#fff');
   player.combo++;
   player.comboTimer = 180;
   player.riot = Math.min(100, player.riot + (fp.isStar?35:18));
@@ -746,10 +785,10 @@ function showUpgradePanel(){
   const opts = document.getElementById('upgradeOpts');
   opts.innerHTML = '';
   const choices = [
-    {label:'体力上限 +30', apply:()=>{upgrades.staminaMax+=30; player.stamina=upgrades.staminaMax;}},
-    {label:'移速/冲刺速度 +15%', apply:()=>{upgrades.speedMult+=0.15;}},
-    {label:'翻滚消耗 -1', apply:()=>{upgrades.rollCost=Math.max(1,upgrades.rollCost-1);}},
-    {label:'合影判定半径 +20%', apply:()=>{upgrades.photoRadiusMult+=0.2;}}
+    {label:'体力上限 +30', key:'staminaMax', toast:'永久强化：体力上限提升！', apply:()=>{upgrades.staminaMax+=30; player.stamina=upgrades.staminaMax;}},
+    {label:'移速/冲刺速度 +15%', key:'speedMult', toast:'永久强化：移动与冲刺速度提升！', apply:()=>{upgrades.speedMult+=0.15;}},
+    {label:'翻滚消耗 -1', key:'rollCost', toast:'永久强化：翻滚体力消耗降低！', apply:()=>{upgrades.rollCost=Math.max(1,upgrades.rollCost-1);}},
+    {label:'合影判定半径 +20%', key:'photoRadiusMult', toast:'永久强化：合影判定范围扩大！', apply:()=>{upgrades.photoRadiusMult+=0.2;}}
   ];
   // pick 2 random distinct
   const shuffled = choices.slice().sort(()=>Math.random()-0.5).slice(0,2);
@@ -757,7 +796,15 @@ function showUpgradePanel(){
     const div = document.createElement('div');
     div.className='upgradeOpt';
     div.textContent = c.label;
-    div.onclick = ()=>{ c.apply(); panel.style.display='none'; paused=false; };
+    div.onclick = ()=>{
+      c.apply();
+      upgradeLevels[c.key]++;
+      updateUpgradeHUD();
+      showCommentary(c.toast, 2400, '#ffd700');
+      goldFlashAlpha = 0.6;
+      panel.style.display='none';
+      paused=false;
+    };
     opts.appendChild(div);
   });
   panel.style.display='flex';
@@ -782,7 +829,7 @@ function formatTime(t){
 
 // ---------- Render ----------
 function worldToScreen(p){
-  return new Vec2(p.x - camera.x, p.y - camera.y);
+  return new Vec2((p.x - camera.x)*ZOOM, (p.y - camera.y)*ZOOM);
 }
 
 function drawStands(now){
@@ -879,8 +926,8 @@ function updateChants(dt){
 
 function drawStaminaBar(){
   const sp = worldToScreen(player.pos);
-  const w = 40, h=5;
-  const x = sp.x-w/2, y = sp.y - player.radius - 16;
+  const w = 40*ZOOM, h=5*ZOOM;
+  const x = sp.x-w/2, y = sp.y - (player.radius+16)*ZOOM;
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(x,y,w,h);
   ctx.fillStyle = player.exhausted? '#888' : '#4caf50';
   ctx.fillRect(x,y, w*(player.stamina/upgrades.staminaMax), h);
@@ -909,12 +956,12 @@ function drawFootballPlayers(){
     ctx.fillText(fp.number, sp.x, sp.y-2);
     if(fp.isStar){
       ctx.strokeStyle='#ffd700'; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(sp.x, sp.y-4, 22, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sp.x, sp.y-4*ZOOM, 22*ZOOM, 0, Math.PI*2); ctx.stroke();
     }
     if(fp.beingPhotographed){
       ctx.strokeStyle='#00e5ff'; ctx.lineWidth=3;
       ctx.beginPath();
-      ctx.arc(sp.x, sp.y-4, 25, -Math.PI/2, -Math.PI/2 + (fp.progress/60)*Math.PI*2);
+      ctx.arc(sp.x, sp.y-4*ZOOM, 25*ZOOM, -Math.PI/2, -Math.PI/2 + (fp.progress/60)*Math.PI*2);
       ctx.stroke();
     }
   }
@@ -932,7 +979,7 @@ function drawSecurity(now){
       ctx.save();
       ctx.strokeStyle = `rgba(255,40,40,${0.4+0.4*Math.sin(now*0.02)})`;
       ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(sp.x, sp.y-14, 14+p*12, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sp.x, sp.y-14*ZOOM, (14+p*12)*ZOOM, 0, Math.PI*2); ctx.stroke();
       ctx.restore();
       scale = 0.9; // 下蹲蓄力
     } else if(s.state==='lunge'){
@@ -946,7 +993,7 @@ function drawSecurity(now){
     ctx.restore();
     if(s.elite){
       ctx.fillStyle='#ffd700'; ctx.font='bold 12px Arial'; ctx.textAlign='center';
-      ctx.fillText('★', sp.x, sp.y-32);
+      ctx.fillText('★', sp.x, sp.y-32*ZOOM);
     }
   }
 }
@@ -1026,8 +1073,8 @@ function loop(now){
     updateChants(dt);
     updateDanger();
 
-    camera.x = player.pos.x - canvas.width/2;
-    camera.y = player.pos.y - canvas.height/2;
+    camera.x = player.pos.x - (canvas.width/ZOOM)/2;
+    camera.y = player.pos.y - (canvas.height/ZOOM)/2;
 
     if(flashAlpha>0) flashAlpha -= 0.05;
     if(goldFlashAlpha>0) goldFlashAlpha -= 0.04;
@@ -1047,6 +1094,8 @@ function loop(now){
 function resetGame(){
   score=0; elapsed=0; gameOver=false; paused=false; photographed=0;
   upgrades = {staminaMax:100, speedMult:1, rollCost:5, photoRadiusMult:1};
+  upgradeLevels = {staminaMax:0, speedMult:0, rollCost:0, photoRadiusMult:0};
+  updateUpgradeHUD();
   upgradeThresholds.length=0;
   [1000,3000,6000,10000,15000].forEach(v=>upgradeThresholds.push(v));
   player.pos = getSpawnPos();
@@ -1063,11 +1112,24 @@ function resetGame(){
   document.getElementById('endPanel').style.display='none';
 }
 
-document.getElementById('restartBtn').onclick = ()=>{ resetGame(); };
+function tryLockLandscape(){
+  try{
+    const el = document.documentElement;
+    if(el.requestFullscreen){ el.requestFullscreen().catch(()=>{}); }
+    if(screen.orientation && screen.orientation.lock){ screen.orientation.lock('landscape').catch(()=>{}); }
+  }catch(e){ /* 部分浏览器不支持，忽略即可，已用CSS提示横屏 */ }
+}
+
+document.getElementById('restartBtn').onclick = ()=>{
+  resetGame();
+  showCommentary(OPENING_LINE, 3000);
+};
 document.getElementById('startBtn').onclick = ()=>{
   document.getElementById('startPanel').style.display='none';
   initAudio();
+  tryLockLandscape();
   resetGame();
+  showCommentary(OPENING_LINE, 3000);
 };
 
 requestAnimationFrame((t)=>{lastTime=t; requestAnimationFrame(loop);});
